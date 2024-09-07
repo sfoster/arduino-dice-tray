@@ -60,16 +60,16 @@ CRGB leds[NUM_LEDS];
 CHSV hsvBlack =     CHSV(0,  0,  0);    // starting color in HSV format
 CHSV hsvDarkRed =   CHSV(244,255,127);  // dark red
 CHSV hsvRed =       CHSV(0,  255,255);  // red
-CHSV hsvYellow =    CHSV(36, 255,255);  // yellow
+CHSV hsvOrange =    CHSV(15, 255,255);  // orange
 CHSV hsvWhite =     CHSV(255,0,255);    // white
-CHSV hsvFullOn = CHSV(40, 255,255);
+CHSV hsvFullOn = CHSV(20, 205,255);
 
 CHSV colorStart = hsvBlack;  // target color in HSV format
 CHSV colorTarget = hsvBlack; // target color in HSV format
 CHSV colorCurrent = colorStart;
 
 // An array of references to colors; these are our color stops in the animation sequence
-CHSV* colorStops[COLOR_STOP_COUNT] = { &hsvBlack, &hsvDarkRed, &hsvRed, &hsvYellow, &hsvFullOn };
+CHSV* colorStops[COLOR_STOP_COUNT] = { &hsvBlack, &hsvDarkRed, &hsvRed, &hsvOrange, &hsvFullOn };
 
 // Waking up or going to sleep state
 // Declare it volatile since it's incremented inside an interrupt
@@ -82,7 +82,7 @@ unsigned long startTime;
 unsigned long elapsedMs;
 volatile unsigned long lastInterruptTime = 0;  // the last time the output pin was toggled
 const unsigned long debounceDelay = 100;    // the debounce time; increase if the output flickers
-const unsigned long onTimeBeforeSleepMs = 20000; // Hold at least 20 secs before going back to sleep
+const unsigned long onTimeBeforeSleepMs = 600000; // Hold at least 10mins before going back to sleep
 const unsigned long shutdownDuration = 1500;
 
 void setup() {
