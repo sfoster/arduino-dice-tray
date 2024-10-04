@@ -17,7 +17,7 @@
 
 #define FRAME_DELAY_MS 8
 
-#define DEBUG true  //set to true for debug output, false for no debug output
+#define DEBUG true //set to true for debug output, false for no debug output
 #define DEBUG_SERIAL \
   if (DEBUG) Serial
   
@@ -81,9 +81,11 @@ volatile byte animationState = 0;
 unsigned long startTime;
 unsigned long elapsedMs;
 volatile unsigned long lastInterruptTime = 0;  // the last time the output pin was toggled
+unsigned long lastDebounceTime = 0;            //
 const unsigned long debounceDelay = 100;    // the debounce time; increase if the output flickers
 const unsigned long onTimeBeforeSleepMs = 600000; // Hold at least 10mins before going back to sleep
 const unsigned long shutdownDuration = 1500;
+int buttonState = LOW;
 
 void setup() {
   Serial.begin(19200);
@@ -96,10 +98,12 @@ void setup() {
 
   // We want to blink the built-in LED
   pinMode(STATUS_PIN, OUTPUT);
+  DEBUG_SERIAL.println("setup, BUTTON_PIN current value: " + (String)digitalRead(BUTTON_PIN));
   
-  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onButtonInterrupt, FALLING); // Interrupt on FALLING signal
-
   resetState();
+  delay(100);
+  FastLED.clear();
+  FastLED.show();
 }
 
 // How long each row of leds is staggered from the previous in the power on animation
@@ -112,6 +116,20 @@ unsigned long animationDuration = perStopDuration * (COLOR_STOP_COUNT - 1); // d
 // Essentially the time for the last row to finish its start animation
 unsigned long startAnimationDuration = animationDuration + (ROW_COUNT - 1) * rowOffsetDelay;
 
+void waitForTicks(int tickCount) {
+  for (; tickCount > 0; tickCount--) {
+    delay(FRAME_DELAY_MS);
+    // also check button state each tick
+    buttonState = digitalRead(BUTTON_PIN);
+    if ((millis() - lastDebounceTime) > debounceDelay) {
+      if (buttonState == HIGH) {
+        DEBUG_SERIAL.println("In waitForTicks, buttonState went high, animationState: " + (String)animationState);
+        animationState += 1;
+        lastDebounceTime = millis();
+      }
+    }
+  }
+}
 /* 
  *  Set LEDs in a row to a color representing a point on a line through a set of color stops, 
  */
@@ -131,10 +149,10 @@ void fadeInRow(int rowIdx, int progressMs) {
   colorCurrent = blend(colorStart, colorTarget, stepProgress, SHORTEST_HUES);
   if (rowIdx == 0) {
     // Only log out the first row to reduce noise
-    DEBUG_SERIAL.println((String)rowIdx + ": progressMs: " + (String)progressMs + "/" + (String)animationDuration + 
-                   ", stop/targetIdx: [" +(String)stopIdx+ "," +(String)targetIdx+ "], stepProgress:" + (String)stepProgress +
-                   ", colorCurrent: " + hsvToString(colorCurrent) +
-                   ", target: " + hsvToString(colorTarget));
+    // DEBUG_SERIAL.println((String)rowIdx + ": progressMs: " + (String)progressMs + "/" + (String)animationDuration + 
+    //               ", stop/targetIdx: [" +(String)stopIdx+ "," +(String)targetIdx+ "], stepProgress:" + (String)stepProgress +
+    //               ", colorCurrent: " + hsvToString(colorCurrent) +
+    //               ", target: " + hsvToString(colorTarget));
   }
   updateRow(leds, allRows[rowIdx], colorCurrent);
 }
@@ -153,7 +171,7 @@ void holdOn() {
   digitalWrite(STATUS_PIN, ledState);
   elapsedMs = 0;
   while (animationState == STATE_HOLDON && elapsedMs < onTimeBeforeSleepMs) {
-    delay(interval);
+    waitForTicks((int)(interval / FRAME_DELAY_MS));
     ledState = ledState ^ 1;
     digitalWrite(STATUS_PIN, ledState);
 
@@ -189,7 +207,7 @@ void playShutdownAnimation() {
     DEBUG_SERIAL.println("playShutdownAnimation, elapsed:" + (String)elapsedMs + "/" + (String)shutdownDuration + ", stepProgress:" + (String)stepProgress + ", colorCurrent:" + hsvToString(colorCurrent));
     updateAllRows(leds, allRows, ROW_COUNT, colorCurrent);
     FastLED.show();
-    delay(FRAME_DELAY_MS);
+    waitForTicks(1);
   }
   DEBUG_SERIAL.println("playShutdownAnimation, complete, ending at colorCurrent:" + hsvToString(colorCurrent));
 }
@@ -207,7 +225,6 @@ void playPowerOnAnimation() {
   
   while(animationState == STATE_POWERON) {
     elapsedMs = millis() - startTime;
-    // DEBUG_SERIAL.println("playPowerOnAnimation, elapsed:" + (String)elapsedMs + "/" + (String)startAnimationDuration + ", colorCurrent:" + hsvToString(colorCurrent));
     if (elapsedMs >= startAnimationDuration) {
       DEBUG_SERIAL.println("playPowerOnAnimation, done");
       break;
@@ -220,7 +237,7 @@ void playPowerOnAnimation() {
       }
     }
     FastLED.show();
-    delay(FRAME_DELAY_MS);
+    waitForTicks(1);
   }
 }
 
@@ -242,6 +259,10 @@ void sleepNow() {
     // Wake up when wake up pin is low.
     waking = 0;
     delay(500); // Delay before sleep for stabilization
+    DEBUG_SERIAL.println("sleepNow, re-attaching the interrupt");
+    EIFR |= (1 << INTF0); // Clear interrupt flag for INT0 (digital pin 2)
+    attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onButtonInterrupt, RISING); // Interrupt on RISING signal
+
     LowPower.powerDown(SLEEP_FOREVER, ADC_OFF, BOD_OFF); 
 }
 
@@ -261,8 +282,6 @@ void loop() {
       while (digitalRead(BUTTON_PIN) == HIGH) {
         delay(100); // Additional debounce delay after release  
       }
-      // already awake, switch inner program state
-      // animationState++;
     }
   
     if (animationState == STATE_POWERON) {
@@ -295,11 +314,16 @@ void loop() {
 
 void onButtonInterrupt() {
   unsigned long currentTime = millis();
+  DEBUG_SERIAL.println("onButtonInterrupt, elapsed: " + (String)(currentTime - lastInterruptTime));
   if (currentTime - lastInterruptTime > debounceDelay) {
+    // unhook the interrupt. We'll re-attach it before powering down
+    detachInterrupt(digitalPinToInterrupt(BUTTON_PIN));
     // Handle the interrupt - the loop will resume
     // already awake, switch inner program state
     animationState++;
     waking = 1;
+    DEBUG_SERIAL.println("onButtonInterrupt, debounced, waking: 1, animationState: " + (String)animationState);
   }
   lastInterruptTime = currentTime;
+  lastDebounceTime = currentTime;
 }
